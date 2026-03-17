@@ -1,0 +1,8 @@
+# Nunca versionar secrets
+**/._secrets/
+**/*secret*
+**/*credentials*
+**/*.env
+**/runtime/
+**/audio_tmp/
+**/tts_tmp/
