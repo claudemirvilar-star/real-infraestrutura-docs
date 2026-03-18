@@ -1,7 +1,7 @@
 # CEABS — BLOQUEIO VEICULAR
 
 > Ficha técnica auditada — gerada por cruzamento entre documentação e código em produção (VPS2)
-> Última auditoria: 2026-03-17
+> Última auditoria: 2026-03-18
 
 ---
 
@@ -87,6 +87,7 @@ MCP Gateway (call.php)
 | Criar pedido | `/app/ceabs/criar_pedido_ceabs.php` | Criação de pedido (MCP) |
 | Confirmar pedido | `/app/ceabs/confirmar_pedido_ceabs.php` | Confirmação 2-step (MCP) |
 | Listar permitidos | `/app/ceabs/listar_veiculos_permitidos.php` | Veículos por autorização |
+| Substituir handler | `/app/whatsapp/substituir_handler.php` | Substituição motorista/encarregado |
 | Governança | `/app/frota/governanca_validar.php` | Motor de permissões |
 | OpenClaw confirm | `/openclaw/ceabs_confirm.php` | Proxy de confirmação |
 | Chave proxy | `/app/_secrets/openclaw_key.php` | X-OpenClaw-Key |
@@ -286,8 +287,25 @@ Enviado para inscritos em `Tab_alertas_bloqueio`. Consolida:
 | `frota real` | Apenas veículos REAL |
 | `frota bth` | Apenas veículos locados |
 | `relatorio ceabs` | Relatório de bloqueios atual |
+| `substituir motorista <placa ou apelido>` | Substitui motorista (multi-step) |
+| `substituir encarregado <placa ou apelido>` | Substitui encarregado (multi-step) |
+| `cancelar` | Cancela operação pendente |
 | `ativar alertas ceabs` | Inscreve em notificações |
 | `desativar alertas ceabs` | Remove inscrição |
+
+### Fluxo de substituição via Donna (desde 2026-03-18)
+
+1. Usuário: `substituir motorista THOR 23`
+2. Donna: "🔄 Substituir MOTORISTA do THOR 23 (ABC-1234). Encaminhe o contato ou digite o nome."
+3. **Flow A:** Usuário encaminha contato WhatsApp/Telegram → Donna extrai nome+telefone
+4. **Flow B:** Usuário digita nome → Donna pede telefone → Usuário digita telefone
+5. Donna: "✅ Confirma? Novo motorista: João Silva (21987654321)? Responda SIM"
+6. Usuário: `SIM`
+7. Donna: "✅ Motorista do THOR 23 atualizado!"
+- **Permissão:** Apenas ADMs (escopo GLOBAL)
+- **Timeout:** 10 minutos
+- **Escape:** comandos como `status`, `frota`, `ajuda` funcionam durante pending
+- **Validação:** rejeita telefone quando espera nome, rejeita contato sem dados
 
 ### Fluxo de bloqueio via Donna
 
