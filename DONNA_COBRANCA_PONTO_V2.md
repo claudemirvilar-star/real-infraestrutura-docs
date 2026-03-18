@@ -254,7 +254,7 @@ Conteúdo:
 
 ```sql
 id              INT(11)       PK AUTO_INCREMENT
-login           VARCHAR(100)  -- nome do encarregado (case insensitive para match)
+login           VARCHAR(100)  UNIQUE -- nome do encarregado (case insensitive para match)
 telefone        VARCHAR(20)   -- formato E.164 (5514...)
 telefone_normalizado VARCHAR(20)
 ativo           TINYINT(4)    -- 1=ativo
@@ -286,7 +286,7 @@ data_criacao    TIMESTAMP
 | Falsos positivos em equipes de apoio/viagem | Média | PENDENTE |
 | Dependência da qualidade da medição | Média | INERENTE |
 | Token WhatsApp expira | ~~Alta~~ | **RESOLVIDO** (token permanente) |
-| Falta de UNIQUE em Tab_encarregados_whatsapp | Baixa | PENDENTE |
+| ~~Falta de UNIQUE em Tab_encarregados_whatsapp~~ | Baixa | **RESOLVIDO (2026-03-18)** |
 | Logs não estruturados | ~~Alta~~ | **RESOLVIDO** (log_donna_cobranca em banco) |
 
 ---
