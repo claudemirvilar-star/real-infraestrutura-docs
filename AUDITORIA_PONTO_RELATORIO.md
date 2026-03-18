@@ -150,22 +150,23 @@ Todos os crons rodam 7 dias por semana (incluindo fins de semana).
 
 ## DESTINATÁRIOS WHATSAPP
 
-### Relatório diário + semanal
+### Relatório de ponto (diário 07:30 + semanal 14:00)
 
 | Nome | Telefone |
 |------|----------|
 | Claudemir | 5514996109252 |
+| Leandro | 5514997366868 |
 | Ana | 5514998486848 |
 | Gabrielli | 5514991185676 |
-| Leandro | 5514997366868 |
 | Lidyane | 5514991050378 |
+
+### Relatório de correções de lançamento (semanal 14:00)
+
+| Nome | Telefone |
+|------|----------|
+| Leandro | 5514997366868 |
+| Claudemir | 5514996109252 |
 | Obras | 5514996237730 |
-
-### Relatório de correções (OBRAS)
-
-Enviado apenas no relatório semanal (14:00) para:
-- **Obras** (5514996237730) — correções pendentes + falta apontamento
-- **Claudemir** (5514996109252) — cópia
 
 ---
 
