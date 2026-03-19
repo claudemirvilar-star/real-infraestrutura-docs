@@ -376,29 +376,31 @@ O campo `motorista_atual_nome` é texto livre. Precisa de match normalizado com 
 > ~~Precisa converter rodovia+km?~~
 > **DESCARTADO:** Localização vem da foto (lat/lon nativo). Rodovia+km não é mais fonte de localização.
 
-## 6.3. Estratégia de extração de dados da foto — **DECISÃO NECESSÁRIA**
+## 6.3. Estratégia de extração de dados da foto — **DECIDIDO: OCR OBRIGATÓRIO**
 
-> A legenda visual da foto contém data/hora e lat/lon, mas está estampada na imagem (não em metadados).
-> Duas abordagens possíveis:
+### Descoberta: timestamp de upload NÃO serve
+Fotos são **enviadas em lote no fim do dia** (18h-20h BRT), não no momento em que são tiradas.
+Exemplo verificado:
+- Legenda foto ANTES: **08:58:21** (hora real de campo)
+- Legenda foto DEPOIS: **15:04:19** (hora real de campo)
+- Upload de ambas: **19:06:50 BRT** (hora do lançamento — inútil como proxy)
 
-**Opção A — OCR (Tesseract):**
-- Instalar Tesseract na VPS2
-- Crop da região da legenda (parte inferior/esquerda da foto)
-- Extrair texto → parsear com regex
-- Prós: dados exatos da foto (data, hora, coordenada, rodovia, km)
-- Contras: dependência de OCR, possível erro de leitura
+### Decisão: OCR é a ÚNICA fonte do horário real
+O OCR da legenda visual é **obrigatório** porque:
+- É a **única fonte** do horário real de campo
+- O timestamp de upload reflete o lançamento (horas depois)
+- Sem OCR, não há como saber quando a foto foi tirada
 
-**Opção B — Proxy via GPS do caminhão:**
-- Usar timestamp de upload do arquivo como hora aproximada
-- Cruzar com posição GPS do caminhão (CEABS `Evento/list`) no mesmo horário
-- Prós: não precisa OCR, dados GPS já disponíveis
-- Contras: timestamp de upload pode ter delay, posição é do caminhão (não exata do ponto)
+### Fluxo decidido
+1. **OCR (Tesseract)** na foto → extrair data/hora + lat/lon da legenda
+2. Com o horário real → buscar GPS do caminhão via `Evento/list` naquele horário
+3. Cruzar posição da foto (OCR) com posição do caminhão (GPS) → validar coerência
+4. Foto `_antes` com **menor horário** = 1º ponto trabalhado
+5. Foto `_depois` com **maior horário** = último ponto trabalhado
 
-**Opção C — Híbrida:**
-- Usar OCR como fonte primária
-- Fallback para GPS do caminhão se OCR falhar
-
-**AGUARDANDO DECISÃO do Claudemir.**
+### Fallback se OCR falhar
+- Marcar como "auditoria incompleta — OCR falhou"
+- Usar apenas GPS do caminhão (início/fim do dia pela ignição) como referência alternativa
 
 ---
 
@@ -428,6 +430,9 @@ O campo `motorista_atual_nome` é texto livre. Precisa de match normalizado com 
 | 20 | **Fotos sem EXIF/GPS** — dados estampados visualmente na imagem (legenda do app) | 18-03-2026 |
 | 21 | **Padrão nome foto:** `{ID}_{antes\|depois}_{cliente}.jpg` em `/app/fotos_medicao/` | 18-03-2026 |
 | 22 | **Legenda contém:** data/hora, lat/lon DMS, precisão GPS, rodovia, pista, km, serviço | 18-03-2026 |
+| 23 | **Timestamp de upload NÃO serve** — fotos enviadas em lote no fim do dia (18h-20h BRT) | 18-03-2026 |
+| 24 | **OCR é obrigatório** — única fonte do horário real de campo | 18-03-2026 |
+| 25 | **Fluxo:** OCR→horário real→GPS caminhão naquele horário→cruzar posições | 18-03-2026 |
 
 ---
 
