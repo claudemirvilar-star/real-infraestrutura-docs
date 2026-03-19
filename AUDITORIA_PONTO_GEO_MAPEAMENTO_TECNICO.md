@@ -48,14 +48,38 @@
 |---|---|
 | **Sistema:** | App de produção (globalsinalizacao.online) |
 | **Tabela:** | `Tab_medicao_nova` |
-| **Fotos:** | Batidas pelo app com **timestamp (data/hora) + lat/lon nativos** — armazenadas na pasta por ID de lançamento |
+| **Fotos:** | Armazenadas em `/app/fotos_medicao/` com padrão `{ID}_{antes|depois}_{cliente}.jpg` |
 | **Função da medição:** | Indicar quais IDs de lançamento foram executados no dia → através dos IDs, localizar as fotos na pasta |
-| **Localização real:** | Extraída da **legenda/timestamp da foto** (lat/lon) — ~~rodovia+km~~ **descartado** como fonte de localização |
-| **Foto menor horário:** | Define o **primeiro ponto trabalhado** do dia |
-| **Foto maior horário:** | Define o **último ponto trabalhado** do dia |
 | **Encarregado:** | Campo `3_usuario` (login do encarregado) |
 | **Colaboradores:** | Já marcados pelo **`tangerino_employee_id`** — ~~match por nome~~ **descartado** |
 | **Veículo:** | Campos `88_equipamento_id` + `89_equipamento_apelido` |
+
+### DESCOBERTA CRÍTICA — Dados da foto estão na LEGENDA VISUAL (stamp)
+
+As fotos **NÃO possuem EXIF/GPS**. O app estampa uma **legenda visual** diretamente na imagem com:
+
+```
+18 de mar. de 2026 08:58:21                    ← DATA/HORA
+23°24'51,49177"S 46°33'5,5688"W ±3,79m         ← LAT/LON (DMS) + PRECISÃO
+0SP21 pista interna ACO                         ← RODOVIA + PISTA
+km 144+900                                      ← KM
+implantação de 2 tripla onda                    ← SERVIÇO (só na foto "depois")
+implantação de 92 mts
+```
+
+**Formato da legenda:**
+- Linha 1: data/hora (`DD de MMM. de YYYY HH:MM:SS`)
+- Linha 2: coordenadas DMS (`GG°MM'SS,DDDDD"S GG°MM'SS,DDDDD"W ±precisão`)
+- Linha 3: rodovia + pista + sentido
+- Linha 4: km
+- Linhas 5+: detalhes do serviço (apenas foto "depois")
+
+**Extração:** Necessário **OCR** (ex: Tesseract) ou **regex no texto** se o app salvar os dados em outra fonte. Alternativa: usar **timestamp de upload do arquivo** + **posição GPS do caminhão** no mesmo horário como proxy.
+
+**Foto ANTES vs DEPOIS:**
+- `{ID}_antes_{cliente}.jpg` → primeiro registro do ponto (horário de início)
+- `{ID}_depois_{cliente}.jpg` → último registro do ponto (horário de fim)
+- Diferença de horário no exemplo: 08:58 → 15:04 (6h de operação)
 
 ## 1.4. Cadastro de Colaboradores
 
@@ -267,7 +291,7 @@ O campo `motorista_atual_nome` é texto livre. Precisa de match normalizado com 
 |---|---|---|
 | **SAÍDA** | Ponto de saída do colaborador vs. horário de referência operacional | ±**10 min** do horário de referência |
 | **HORÁRIO DE REFERÊNCIA** | Momento em que o caminhão se afastou **3 km** do último ponto de operação | Calculado via GPS CEABS |
-| **ÚLTIMO PONTO DE OPERAÇÃO** | Definido pela **foto com maior horário** do dia (lat/lon nativo da foto) | Foto do app com timestamp |
+| **ÚLTIMO PONTO DE OPERAÇÃO** | Definido pela **foto "depois"** da última medição do dia (lat/lon extraído da legenda visual ou via GPS caminhão no horário de upload) | OCR da legenda ou proxy GPS |
 
 ### Classificação de desvio — Equipe
 
@@ -339,17 +363,42 @@ O campo `motorista_atual_nome` é texto livre. Precisa de match normalizado com 
 > ~~Frequência de atualização?~~
 > **RESPONDIDO:** ~1 min com ignição ligada (30s a 2min), 5-30 min desligada. Robusto para janela de ±10min.
 
-## ~~6.5.~~ → 6.2. Estrutura das fotos na pasta — **EM ABERTO**
+## ~~6.5.~~ → 6.2. Estrutura das fotos na pasta — **RESPONDIDO**
 
-> Como estão organizadas as fotos na pasta? Qual a estrutura de nomes?
-> O ID do lançamento é parte do nome do arquivo ou do caminho?
-> Como extrair lat/lon e timestamp de cada foto?
-
-**Impacto:** Define como o motor vai localizar e ler as fotos para obter coordenadas e horários.
+> ~~Como estão organizadas?~~
+> **RESPONDIDO:** Fotos em `/app/fotos_medicao/` com padrão `{ID}_{antes|depois}_{cliente}.jpg`.
+> Dados (data/hora + lat/lon DMS + rodovia + km) estão **estampados visualmente na imagem** (legenda/stamp do app).
+> **NÃO há EXIF/GPS** — dados são visuais, não metadados.
+> Extração requer **OCR** (Tesseract) ou usar timestamp de upload + GPS do caminhão como proxy.
+> Dimensão típica: 1920x864 (renderizada com legenda).
 
 ## ~~6.6. Conversão rodovia+km~~ — DESCARTADO
 > ~~Precisa converter rodovia+km?~~
 > **DESCARTADO:** Localização vem da foto (lat/lon nativo). Rodovia+km não é mais fonte de localização.
+
+## 6.3. Estratégia de extração de dados da foto — **DECISÃO NECESSÁRIA**
+
+> A legenda visual da foto contém data/hora e lat/lon, mas está estampada na imagem (não em metadados).
+> Duas abordagens possíveis:
+
+**Opção A — OCR (Tesseract):**
+- Instalar Tesseract na VPS2
+- Crop da região da legenda (parte inferior/esquerda da foto)
+- Extrair texto → parsear com regex
+- Prós: dados exatos da foto (data, hora, coordenada, rodovia, km)
+- Contras: dependência de OCR, possível erro de leitura
+
+**Opção B — Proxy via GPS do caminhão:**
+- Usar timestamp de upload do arquivo como hora aproximada
+- Cruzar com posição GPS do caminhão (CEABS `Evento/list`) no mesmo horário
+- Prós: não precisa OCR, dados GPS já disponíveis
+- Contras: timestamp de upload pode ter delay, posição é do caminhão (não exata do ponto)
+
+**Opção C — Híbrida:**
+- Usar OCR como fonte primária
+- Fallback para GPS do caminhão se OCR falhar
+
+**AGUARDANDO DECISÃO do Claudemir.**
 
 ---
 
@@ -375,6 +424,10 @@ O campo `motorista_atual_nome` é texto livre. Precisa de match normalizado com 
 | 16 | **TODAS as equipes trabalham com equipamentos rastreados CEABS** | 18-03-2026 |
 | 17 | **API CEABS tem histórico completo** via `Evento/list` — cron de gravação desnecessário | 18-03-2026 |
 | 18 | **Granularidade GPS: ~1min** com ignição ligada, 5-30min desligada | 18-03-2026 |
+| 19 | **`motorista_atual_nome` na Tab_frota é confiável** — confirmado pelo Claudemir | 18-03-2026 |
+| 20 | **Fotos sem EXIF/GPS** — dados estampados visualmente na imagem (legenda do app) | 18-03-2026 |
+| 21 | **Padrão nome foto:** `{ID}_{antes\|depois}_{cliente}.jpg` em `/app/fotos_medicao/` | 18-03-2026 |
+| 22 | **Legenda contém:** data/hora, lat/lon DMS, precisão GPS, rodovia, pista, km, serviço | 18-03-2026 |
 
 ---
 
