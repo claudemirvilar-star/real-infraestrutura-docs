@@ -33,6 +33,7 @@ ini_set("display_errors", 0);
 require_once __DIR__ . "/../frota/normalizar_telefone.php";
 require_once __DIR__ . "/../frota/governanca_validar.php";
 require_once __DIR__ . "/donna_brain_claude.php";
+require_once __DIR__ . "/substituir_handler.php";
 
 // ------------------------------------------------------
 // HELPERS
@@ -177,6 +178,7 @@ function frota_buscar_por_apelido(string $apelido): ?array {
     $db = $conn ?? null;
     if (!$db) return null;
 
+    // 1. Busca exata (case-insensitive)
     $stmt = $db->prepare(
         "SELECT apelido, placa FROM Tab_frota WHERE LOWER(apelido) = LOWER(?) LIMIT 1"
     );
@@ -186,9 +188,41 @@ function frota_buscar_por_apelido(string $apelido): ?array {
     $res = $stmt->get_result();
     $row = $res ? $res->fetch_assoc() : null;
     $stmt->close();
-    if (!$row) return null;
+    if ($row) return ["apelido" => $row["apelido"], "placa" => $row["placa"]];
 
-    return ["apelido" => $row["apelido"], "placa" => $row["placa"]];
+    // 2. Normalizar: "thor27" -> "THOR 27", "thor 27" -> "THOR 27"
+    //    Insere espaco entre letras e numeros (ex: THOR27 -> THOR 27)
+    $normalizado = preg_replace('/([A-Za-z])([0-9])/', '$1 $2', trim($apelido));
+    $normalizado = preg_replace('/([0-9])([A-Za-z])/', '$1 $2', $normalizado);
+    $normalizado = preg_replace('/\s+/', ' ', $normalizado); // colapsar espacos
+
+    if (strtolower($normalizado) !== strtolower($apelido)) {
+        $stmt = $db->prepare(
+            "SELECT apelido, placa FROM Tab_frota WHERE LOWER(apelido) = LOWER(?) LIMIT 1"
+        );
+        if (!$stmt) return null;
+        $stmt->bind_param("s", $normalizado);
+        $stmt->execute();
+        $res = $stmt->get_result();
+        $row = $res ? $res->fetch_assoc() : null;
+        $stmt->close();
+        if ($row) return ["apelido" => $row["apelido"], "placa" => $row["placa"]];
+    }
+
+    // 3. Busca parcial LIKE (fallback)
+    $like = '%' . $db->real_escape_string($apelido) . '%';
+    $stmt = $db->prepare(
+        "SELECT apelido, placa FROM Tab_frota WHERE LOWER(apelido) LIKE LOWER(?) LIMIT 1"
+    );
+    if (!$stmt) return null;
+    $stmt->bind_param("s", $like);
+    $stmt->execute();
+    $res = $stmt->get_result();
+    $row = $res ? $res->fetch_assoc() : null;
+    $stmt->close();
+    if ($row) return ["apelido" => $row["apelido"], "placa" => $row["placa"]];
+
+    return null;
 }
 
 function resolver_placa_ou_apelido(string $input): array {
@@ -261,6 +295,76 @@ $cmd = strtr($cmd, [
 $reply = "";
 
 // ------------------------------------------------------
+// INTERCEPTOR: PENDING DE SUBSTITUIÇÃO (multi-step)
+// ------------------------------------------------------
+
+$_pend_sub = pending_get($from);
+if ($_pend_sub && ($_pend_sub["acao"] ?? "") === "substituir") {
+    // Verificar timeout
+    if (substituir_timeout_check($_pend_sub)) {
+        pending_clear($from);
+        // Continuar processamento normal (pending expirou)
+        $_pend_sub = null;
+    }
+}
+
+// Comandos que devem ser processados normalmente mesmo com pending ativo
+$_escape_cmds = ["cancelar", "sim", "ajuda", "menu", "frota", "status", "localizar", "bloquear", "desbloquear"];
+$_is_escape = false;
+foreach ($_escape_cmds as $_esc) {
+    if (strpos($cmd, $_esc) === 0) { $_is_escape = true; break; }
+}
+
+if ($_pend_sub && ($_pend_sub["acao"] ?? "") === "substituir" && !$_is_escape) {
+    $_step = $_pend_sub["step"] ?? "";
+    $pend_sub_tipo = $_pend_sub["tipo"] ?? "motorista";
+    $_contact_name = $args["contact_name"] ?? null;
+    $_contact_phone = $args["contact_phone"] ?? null;
+
+    if ($_step === "aguardando_contato") {
+        if ($_contact_name && $_contact_phone) {
+            // Flow A: contato compartilhado
+            $reply = substituir_contato($from, $_contact_name, $_contact_phone);
+        } else {
+            // Flow B: nome digitado
+            // Se parece telefone, não aceitar como nome
+            $_text_digits = preg_replace("/[^0-9]/", "", $text);
+            if (strlen($_text_digits) >= 8 && strlen($_text_digits) <= 15 && strlen($_text_digits) > (strlen($text) / 2)) {
+                $reply = "❌ Parece um telefone. Primeiro digite o *nome* do novo " . $pend_sub_tipo . ".";
+            } elseif (strtolower(trim($text)) === "__contato_compartilhado__") {
+                // Contato compartilhado mas sem contact_name/phone (fallback)
+                $reply = "❌ Não consegui ler o contato. Tente novamente ou digite o *nome* do novo " . $pend_sub_tipo . ".";
+            } else {
+                $reply = substituir_nome($from, $text);
+            }
+        }
+    } elseif ($_step === "aguardando_telefone") {
+        $reply = substituir_telefone($from, $text);
+    } elseif ($_step === "aguardando_confirmacao") {
+        // Se não é SIM nem cancelar, avisar
+        $reply = "Responda *SIM* para confirmar ou *cancelar* para desistir.";
+    }
+
+    if ($reply !== "") {
+        j(["ok" => true, "data" => ["reply_text" => $reply]]);
+    }
+}
+
+// ------------------------------------------------------
+// CANCELAR (limpa pending ativo)
+// ------------------------------------------------------
+
+if ($cmd === "cancelar") {
+    $_pend_cancel = pending_get($from);
+    if ($_pend_cancel) {
+        pending_clear($from);
+        $reply = "❌ Operação cancelada.";
+    } else {
+        $reply = "Nenhuma operação pendente para cancelar.";
+    }
+    j(["ok" => true, "data" => ["reply_text" => $reply]]);
+}
+// ------------------------------------------------------
 // AJUDA
 // ------------------------------------------------------
 
@@ -281,7 +385,11 @@ if ($cmd == "ajuda" || $cmd == "menu") {
         "ativar alertas ceabs\n" .
         "desativar alertas ceabs\n" .
         "ativar alertas rh\n" .
-        "desativar alertas rh";
+        "desativar alertas rh\n\n" .
+        "*Substituição:*\n" .
+        "substituir motorista <placa ou apelido>\n" .
+        "substituir encarregado <placa ou apelido>\n" .
+        "cancelar — cancela operação pendente";
 }
 
 // ------------------------------------------------------
@@ -467,9 +575,17 @@ elseif ($cmd == "sim") {
                 $msgErro = $json["msg"] ?? "Erro desconhecido";
                 $reply = "❌ Falha no desbloqueio de " . $label . "\nErro: " . $msgErro . "\nTente novamente ou contate o suporte.";
             }
+        } elseif ($acao === "substituir") {
+            if (($pend["step"] ?? "") !== "aguardando_confirmacao") {
+                $reply = "⚠️ Substituição incompleta. Use *cancelar* e comece novamente.";
+            } else {
+                $reply = substituir_confirmar($from);
+            }
         }
 
-        pending_clear($from);
+        if ($acao !== "substituir") {
+            pending_clear($from);
+        }
     }
 }
 
@@ -647,7 +763,16 @@ elseif (strpos($cmd, "desbloquear") === 0) {
 // ------------------------------------------------------
 
 elseif (preg_match('/^(status|localizar)\s+(.+)$/i', $cmd, $m)) {
-    $placa = strtoupper(trim($m[2]));
+    $input_raw = trim($m[2]);
+    $resolved = resolver_placa_ou_apelido($input_raw);
+
+    if (!$resolved["encontrado"]) {
+        $reply = "❌ Veículo não encontrado: " . strtoupper($input_raw) . "
+Digite a placa ou o apelido exato (ex: THOR 23)";
+        j(["ok" => true, "data" => ["reply_text" => $reply]]);
+    }
+
+    $placa = $resolved["placa"];
     $gov = governanca_validar($telefone, $placa, "CONSULTAR", "WHATSAPP");
     if (!$gov["autorizado"]) {
         $reply = "⛔ " . $gov["motivo"];
@@ -692,6 +817,23 @@ elseif (preg_match('/^(status|localizar)\s+(.+)$/i', $cmd, $m)) {
         $reply .= "Status: " . ($bloqueio ?: $nd) . "\n";
     } else {
         $reply = "Erro consultando " . $placa;
+    }
+}
+
+// ------------------------------------------------------
+// SUBSTITUIR MOTORISTA / ENCARREGADO
+// ------------------------------------------------------
+
+elseif (preg_match('/^substituir\s+(motorista|encarregado)\s+(.+)$/i', $cmd, $_mSub)) {
+    $_tipo_sub = strtolower(trim($_mSub[1]));
+    $_veiculo_sub = trim($_mSub[2]);
+
+    // Validar permissão ADM (escopo GLOBAL)
+    $gov_sub = governanca_validar_frota_completa($telefone, "WHATSAPP");
+    if (!$gov_sub["autorizado"]) {
+        $reply = "⛔ Você não tem permissão para substituir motorista/encarregado.";
+    } else {
+        $reply = substituir_iniciar($from, $_tipo_sub, $_veiculo_sub, $telefone);
     }
 }
 

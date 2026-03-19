@@ -160,6 +160,25 @@ if (isset($message["video_note"])) {
     }
 }
 
+// ======================================================
+// CONTATO COMPARTILHADO
+// ======================================================
+$_tg_contact_name = null;
+$_tg_contact_phone = null;
+
+if (isset($message["contact"])) {
+    $tg_contact = $message["contact"];
+    $_tg_contact_name = trim(($tg_contact["first_name"] ?? "") . " " . ($tg_contact["last_name"] ?? ""));
+    $_tg_contact_phone = $tg_contact["phone_number"] ?? "";
+    $msg_text = "__contato_compartilhado__";
+
+    tg_log("CONTACT_RECEIVED", [
+        "chat_id"       => $chat_id,
+        "contact_name"  => $_tg_contact_name,
+        "contact_phone" => $_tg_contact_phone,
+    ]);
+}
+
 // Se não tem texto (foto, sticker, etc), ignora
 if ($msg_text === "") {
     tg_log("NON_TEXT_MESSAGE", ["type" => array_keys($message)]);
@@ -189,6 +208,8 @@ $router_payload = [
         "from"     => "tg:" . $from_id,
         "text"     => $msg_text,
         "is_audio" => $is_audio,
+        "contact_name" => $_tg_contact_name,
+        "contact_phone" => $_tg_contact_phone,
     ],
     "meta" => [
         "source"    => "telegram:user:" . $from_id,
