@@ -1,8 +1,8 @@
 # DOCUMENTO 2 — MAPEAMENTO TÉCNICO DO AUDITOR DE PONTO
 ## Auditoria Inteligente de Ponto por Geolocalização, Veículo e Produção
 
-**Data:** 18-03-2026
-**Status:** Mapeamento técnico das fontes de dados
+**Data:** 18-03-2026 (atualizado com respostas do Claudemir)
+**Status:** Mapeamento técnico das fontes de dados — REVISADO
 **Fase:** Pré-código / levantamento de tabelas, campos, vínculos e regras
 **Base:** Documento 1 (`AUDITORIA_PONTO_GEOLOCALIZACAO.md`)
 
@@ -30,10 +30,17 @@
 | **API:** | `apicps.ceabs.com.br` |
 | **Acesso:** | VPS1 → proxy → CEABS API |
 | **Dados:** | Posição GPS, ignição (ON/OFF), velocidade, timestamp |
-| **16 veículos** com rastreador CEABS ativo de 39 no total |
+| **TODAS as equipes** trabalham com equipamentos rastreados CEABS |
 
-**Endpoint principal:** `fleet_status` retorna posição atual + estado da ignição.
-**Histórico:** Necessário verificar se a API CEABS fornece trilha GPS histórica por dia ou apenas posição atual.
+**Endpoints disponíveis:**
+| # | Método | URL | Função |
+|---|--------|-----|--------|
+| 1 | `UltimaPosicao/List` | `/api/UltimaPosicao/List` | Última geolocalização (já usamos) |
+| 2 | `Evento/list` | `/api/evento/list` | **Histórico completo de posições GPS** (aceita DataInicio/DataFim) |
+| 3 | `BuscarViagensPorObjetoRastreavelEDia` | `/api/Viagens/...` | **Histórico de viagens** do veículo no dia |
+
+**CONFIRMADO:** API tem histórico completo via `Evento/list` — não precisa gravar posições via cron.
+**Granularidade:** ~1 min com ignição ligada (30s a 2min), 5-30 min com ignição desligada.
 
 ## 1.3. Produção / Medições
 
@@ -41,10 +48,13 @@
 |---|---|
 | **Sistema:** | App de produção (globalsinalizacao.online) |
 | **Tabela:** | `Tab_medicao_nova` |
-| **Fotos:** | Campos inline (`69_foto_antes`, `70_foto_depois`) — URLs no servidor |
-| **Localização:** | Via rodovia + km (`5_rodovia` + `6_km_inicial`), **NÃO por coordenadas GPS** |
+| **Fotos:** | Batidas pelo app com **timestamp (data/hora) + lat/lon nativos** — armazenadas na pasta por ID de lançamento |
+| **Função da medição:** | Indicar quais IDs de lançamento foram executados no dia → através dos IDs, localizar as fotos na pasta |
+| **Localização real:** | Extraída da **legenda/timestamp da foto** (lat/lon) — ~~rodovia+km~~ **descartado** como fonte de localização |
+| **Foto menor horário:** | Define o **primeiro ponto trabalhado** do dia |
+| **Foto maior horário:** | Define o **último ponto trabalhado** do dia |
 | **Encarregado:** | Campo `3_usuario` (login do encarregado) |
-| **Equipe:** | Campos `71_funcionario1` até `85_funcionario15` (nomes dos colaboradores) |
+| **Colaboradores:** | Já marcados pelo **`tangerino_employee_id`** — ~~match por nome~~ **descartado** |
 | **Veículo:** | Campos `88_equipamento_id` + `89_equipamento_apelido` |
 
 ## 1.4. Cadastro de Colaboradores
@@ -186,20 +196,20 @@
 Tab_encarregados_whatsapp.login
         ↕ (= Tab_medicao_nova.3_usuario)
 Tab_medicao_nova
-        ├── .71_funcionario1 ... .85_funcionario15 (nomes dos colaboradores)
-        │       ↕ (match por NOME com Tab_colaboradores.nome)
-        │   Tab_colaboradores.tangerino_employee_id
+        ├── ID do lançamento → pasta de fotos
+        │       → fotos com timestamp (data/hora) + lat/lon nativos
+        │       → foto menor horário = PRIMEIRO ponto trabalhado
+        │       → foto maior horário = ÚLTIMO ponto trabalhado
+        │
+        ├── Colaboradores (via tangerino_employee_id — vínculo DIRETO)
         │       ↕ (= espelho_tangerino_punch.employee_id)
         │   espelho_tangerino_punch.payload_json → lat/lon entrada/saída
         │
-        ├── .89_equipamento_apelido (apelido do veículo)
-        │       ↕ (match por APELIDO com Tab_frota.apelido)
-        │   Tab_frota.placa
-        │       ↕ (placa → ativo CEABS → GPS)
-        │   API CEABS → posição, ignição, velocidade
-        │
-        └── .69_foto_antes / .70_foto_depois (URLs das fotos)
-                → fotos no servidor com horário de upload
+        └── .89_equipamento_apelido (apelido do veículo)
+                ↕ (match por APELIDO com Tab_frota.apelido)
+            Tab_frota.placa
+                ↕ (placa → ativo CEABS → GPS)
+            API CEABS Evento/list → histórico completo posições + ignição
 ```
 
 ## 3.2. Vínculos detalhados
@@ -207,16 +217,16 @@ Tab_medicao_nova
 | De | Para | Campo de vínculo | Tipo de match |
 |---|---|---|---|
 | Encarregado → Medição | `Tab_encarregados_whatsapp.login` | `Tab_medicao_nova.3_usuario` | EXATO |
-| Medição → Colaboradores | `Tab_medicao_nova.71_funcionarioN` | `Tab_colaboradores.nome` | **POR NOME (risco)** |
-| Colaborador → Ponto | `Tab_colaboradores.tangerino_employee_id` | `espelho_tangerino_punch.employee_id` | EXATO |
+| Medição → Colaboradores | `tangerino_employee_id` | `espelho_tangerino_punch.employee_id` | **EXATO (ID direto)** |
+| Medição → Fotos | ID do lançamento | Pasta de fotos (timestamp + lat/lon) | **EXATO (ID)** |
 | Medição → Veículo | `Tab_medicao_nova.89_equipamento_apelido` | `Tab_frota.apelido` | **POR APELIDO (normalizar)** |
-| Veículo → GPS CEABS | `Tab_frota.placa` | API CEABS (ativo) | EXATO (placa) |
-| Veículo → Motorista | `Tab_frota.motorista_atual_nome` | `Tab_colaboradores.nome` | **POR NOME (risco)** |
+| Veículo → GPS CEABS | `Tab_frota.placa` | API CEABS `Evento/list` | EXATO (placa) |
+| Veículo → Motorista | `Tab_frota.motorista_atual_nome` | `Tab_colaboradores.nome` | **POR NOME (normalizar)** |
 
 ## 3.3. Pontos críticos de vínculo
 
-### ALERTA 1 — Colaboradores vinculados por NOME
-Os campos `71_funcionario1` até `85_funcionario15` contêm **nomes livres** (texto). O match com `Tab_colaboradores.nome` precisa ser **normalizado** (maiúsculas, acentos, abreviações).
+### ~~ALERTA 1~~ — RESOLVIDO: Colaboradores por ID direto
+~~Os campos `funcionarioN` vinculavam por nome.~~ **RESOLVIDO:** colaboradores já estão marcados pelo `tangerino_employee_id` — vínculo direto e inequívoco.
 
 ### ALERTA 2 — Apelido do veículo precisa de normalização
 O campo `89_equipamento_apelido` pode ter variações ("Thor 27", "THOR 27", "thor27"). Comparação com `Tab_frota.apelido` precisa ignorar case e espaços.
@@ -224,11 +234,11 @@ O campo `89_equipamento_apelido` pode ter variações ("Thor 27", "THOR 27", "th
 ### ALERTA 3 — Motorista identificado por nome na Tab_frota
 O campo `motorista_atual_nome` é texto livre. Precisa de match normalizado com `Tab_colaboradores.nome`.
 
-### ALERTA 4 — Fotos sem georreferenciamento próprio
-As fotos da produção (`69_foto_antes`, `70_foto_depois`) são URLs de arquivo. O **georreferenciamento da foto depende dos metadados EXIF** do arquivo original. Necessário verificar se as fotos preservam EXIF com lat/lon ao serem salvas no servidor.
+### ~~ALERTA 4~~ — RESOLVIDO: Fotos TÊM geolocalização nativa
+~~Dependia de EXIF.~~ **RESOLVIDO:** fotos são batidas pelo app com **timestamp (data/hora) + latitude/longitude nativos**. Georreferenciamento confirmado.
 
-### ALERTA 5 — Localização da medição é por rodovia+km, não por coordenadas
-A medição usa `5_rodovia` + `6_km_inicial` como referência espacial. Para cruzamento geográfico com GPS do caminhão ou ponto do Tangerino, seria necessário **converter rodovia+km em coordenadas** ou usar abordagem alternativa.
+### ~~ALERTA 5~~ — RESOLVIDO: Localização vem da FOTO, não da rodovia+km
+~~Precisava converter rodovia+km em coordenadas.~~ **RESOLVIDO:** a localização real será extraída da **legenda/timestamp da foto** (lat/lon). Rodovia+km descartado como fonte de localização.
 
 ---
 
@@ -257,7 +267,7 @@ A medição usa `5_rodovia` + `6_km_inicial` como referência espacial. Para cru
 |---|---|---|
 | **SAÍDA** | Ponto de saída do colaborador vs. horário de referência operacional | ±**10 min** do horário de referência |
 | **HORÁRIO DE REFERÊNCIA** | Momento em que o caminhão se afastou **3 km** do último ponto de operação | Calculado via GPS CEABS |
-| **ÚLTIMO PONTO DE OPERAÇÃO** | Definido pela última foto válida do dia OU último km registrado na medição | Foto com EXIF > rodovia+km |
+| **ÚLTIMO PONTO DE OPERAÇÃO** | Definido pela **foto com maior horário** do dia (lat/lon nativo da foto) | Foto do app com timestamp |
 
 ### Classificação de desvio — Equipe
 
@@ -273,7 +283,7 @@ A medição usa `5_rodovia` + `6_km_inicial` como referência espacial. Para cru
 | Regra | Condição | Ação |
 |---|---|---|
 | **SEM_FOTO** | Medição sem `69_foto_antes` e `70_foto_depois` | Alerta estrutural — auditoria limitada |
-| **SEM_GPS** | Veículo sem dados CEABS no dia ou sem rastreador ativo | Alerta estrutural — auditoria limitada |
+| **SEM_GPS** | Veículo sem dados CEABS no dia (todas equipes têm CEABS, mas pode ter falha de sinal) | Alerta estrutural — auditoria limitada |
 | **SEM_VEICULO** | `89_equipamento_apelido` vazio ou sem match na `Tab_frota` | Alerta estrutural — cadeia quebrada |
 | **SEM_PONTO** | Colaborador na medição sem registro em `espelho_tangerino_punch` | Alerta estrutural — ausência de ponto |
 | **PONTO_SEM_PRODUCAO** | Ponto existente sem vínculo com nenhuma medição do dia | Alerta informativo |
@@ -297,68 +307,49 @@ A medição usa `5_rodovia` + `6_km_inicial` como referência espacial. Para cru
 
 | Dado ausente | Fallback |
 |---|---|
-| **Foto sem EXIF/geo** | Usar rodovia+km da medição como referência aproximada |
-| **GPS CEABS indisponível** | Auditar apenas com geolocalização do ponto Tangerino vs. local da medição |
+| **Foto sem timestamp/geo** | Usar posição GPS do caminhão no horário aproximado da medição |
+| **GPS CEABS indisponível** | Auditar apenas com geolocalização do ponto Tangerino vs. localização da foto |
 | **Geolocalização do ponto ausente** | `payload_json` sem `locationIn`/`locationOut` → marcar como "auditoria incompleta" |
 | **Apelido do veículo não encontrado** | Tentar normalização (case insensitive, sem espaços) → se falhar, alerta SEM_VEICULO |
-| **Nome do colaborador não encontrado** | Tentar match parcial (LIKE) → se falhar, alerta de vínculo quebrado |
-| **Veículo sem rastreador CEABS** | Dos 39 veículos, apenas 16 têm CEABS ativo → para os demais, auditar sem GPS |
+| **Sem fotos no lançamento** | Usar posição GPS do caminhão como referência de primeiro/último ponto |
 
-## 5.3. Conversão rodovia+km → coordenadas (fallback geográfico)
-
-A medição registra localização como `5_rodovia` + `6_km_inicial` (ex: "PR-090", "km 152").
-
-**Opções para converter em coordenadas:**
-1. Manter tabela de referência `rodovia + km → lat/lon` (alimentada manualmente ou por API)
-2. Usar a geolocalização da primeira batida de ponto do encarregado como proxy do local da obra
-3. Usar a posição GPS do caminhão no horário da medição como proxy
-
-**Decisão pendente** — qual abordagem adotar.
+~~## 5.3. Conversão rodovia+km → coordenadas~~ — **DESCARTADO**
+~~Rodovia+km como fonte de localização.~~ **Localização agora vem da foto (lat/lon nativo).** Não precisa converter rodovia+km.
 
 ---
 
 # 6. DÚVIDAS EM ABERTO
 
-## 6.1. Geolocalização das fotos
+## ~~6.1. Geolocalização das fotos~~ — RESPONDIDO
+> ~~Fotos preservam EXIF?~~
+> **RESPONDIDO:** Fotos são batidas pelo app com **timestamp (data/hora) + lat/lon nativos**. Geo confirmado.
 
-> As fotos salvas em `/app/fotos_medicao/` preservam os metadados EXIF (latitude/longitude)?
-> Ou o processo de upload/resize remove o EXIF?
+## ~~6.2. Histórico GPS CEABS~~ — RESPONDIDO
+> ~~API tem histórico ou só posição atual?~~
+> **RESPONDIDO:** API tem histórico completo via `Evento/list` (DataInicio/DataFim com paginação). Também tem `Viagens` por dia. Plano B (cron) descartado.
 
-**Impacto:** Se não houver EXIF, o pilar "última foto georreferenciada" perde precisão. O fallback seria usar a posição do caminhão no horário da foto.
-
-## 6.2. Histórico GPS CEABS
-
-> A API CEABS fornece trilha GPS histórica (posições ao longo do dia)?
-> Ou apenas a posição atual em tempo real?
-
-**Impacto:** Se não houver histórico, será necessário **coletar e armazenar** posições via cron (ex: a cada 5 min) para construir a trilha do dia.
-
-## 6.3. Identificação inequívoca do motorista
+## ~~6.3.~~ → 6.1. Identificação inequívoca do motorista — **EM ABERTO**
 
 > O campo `Tab_frota.motorista_atual_nome` é atualizado em tempo real?
 > Ou pode estar desatualizado em relação ao motorista real do dia?
 
-**Impacto:** Se não for confiável, seria necessário cruzar com a medição (verificar se algum dos `funcionarioN` é motorista pela `funcao` na `Tab_colaboradores`).
+**Impacto:** Se não for confiável, seria necessário cruzar com a medição (verificar se algum dos colaboradores tem `funcao` = motorista na `Tab_colaboradores`).
 
-## 6.4. Granularidade do CEABS
+## ~~6.4. Granularidade do CEABS~~ — RESPONDIDO
+> ~~Frequência de atualização?~~
+> **RESPONDIDO:** ~1 min com ignição ligada (30s a 2min), 5-30 min desligada. Robusto para janela de ±10min.
 
-> Qual a frequência de atualização da posição GPS? (a cada 30s? 1min? 5min?)
+## ~~6.5.~~ → 6.2. Estrutura das fotos na pasta — **EM ABERTO**
 
-**Impacto:** Define a precisão do cálculo de "momento em que o caminhão se afastou 3km".
+> Como estão organizadas as fotos na pasta? Qual a estrutura de nomes?
+> O ID do lançamento é parte do nome do arquivo ou do caminho?
+> Como extrair lat/lon e timestamp de cada foto?
 
-## 6.5. Múltiplas fotos por medição
+**Impacto:** Define como o motor vai localizar e ler as fotos para obter coordenadas e horários.
 
-> Existem medições com mais de 2 fotos (além de foto_antes e foto_depois)?
-> Ou são sempre exatamente 2?
-
-**Impacto:** Se sempre 2, a "última foto do dia" será `70_foto_depois` da última medição. Se houver mais, precisamos de outra estratégia.
-
-## 6.6. Conversão rodovia+km
-
-> Existe alguma tabela de referência de coordenadas por rodovia+km no sistema?
-> Ou essa conversão precisará ser construída do zero?
-
-**Impacto:** Define o esforço da Fase 1 e se o cruzamento geográfico será possível desde o início.
+## ~~6.6. Conversão rodovia+km~~ — DESCARTADO
+> ~~Precisa converter rodovia+km?~~
+> **DESCARTADO:** Localização vem da foto (lat/lon nativo). Rodovia+km não é mais fonte de localização.
 
 ---
 
@@ -375,9 +366,15 @@ A medição registra localização como `5_rodovia` + `6_km_inicial` (ex: "PR-09
 | 7 | Dias não produtivos são **excluídos** da auditoria | 18-03-2026 |
 | 8 | Colaboradores ADM (`alocacao_fixa = ADM`) são **excluídos** da auditoria de campo | 18-03-2026 |
 | 9 | Geolocalização do ponto vem do `payload_json` da `espelho_tangerino_punch` | 18-03-2026 |
-| 10 | Fotos da produção estão em campos inline (`69_foto_antes`, `70_foto_depois`) | 18-03-2026 |
-| 11 | Cadeia de vínculo: encarregado → medição → funcionários (por nome) → Tangerino (por employee_id) | 18-03-2026 |
-| 12 | Cadeia de vínculo: medição → apelido → Tab_frota → placa → CEABS GPS | 18-03-2026 |
+| 10 | Cadeia de vínculo: medição → apelido → Tab_frota → placa → CEABS GPS | 18-03-2026 |
+| 11 | **Fotos têm timestamp (data/hora) + lat/lon nativos** — batidas pelo app | 18-03-2026 |
+| 12 | **Colaboradores vinculados por `tangerino_employee_id`** (vínculo direto, não por nome) | 18-03-2026 |
+| 13 | **Produção serve para identificar IDs de lançamento → localizar fotos na pasta** | 18-03-2026 |
+| 14 | **Foto menor horário = primeiro ponto trabalhado, foto maior horário = último ponto** | 18-03-2026 |
+| 15 | **Localização extraída da legenda/timestamp da foto** — rodovia+km descartado | 18-03-2026 |
+| 16 | **TODAS as equipes trabalham com equipamentos rastreados CEABS** | 18-03-2026 |
+| 17 | **API CEABS tem histórico completo** via `Evento/list` — cron de gravação desnecessário | 18-03-2026 |
+| 18 | **Granularidade GPS: ~1min** com ignição ligada, 5-30min desligada | 18-03-2026 |
 
 ---
 
@@ -385,21 +382,19 @@ A medição registra localização como `5_rodovia` + `6_km_inicial` (ex: "PR-09
 
 Com este mapeamento técnico concluído, as próximas ações são:
 
-## 8.1. Resolver dúvidas em aberto (Seção 6)
-Validar com testes diretos no banco e nos arquivos:
-- EXIF das fotos
-- Histórico GPS CEABS
-- Confiabilidade do motorista_atual_nome
-- Granularidade do GPS
+## 8.1. Resolver 2 dúvidas restantes
+- **6.1** — Confiabilidade do `motorista_atual_nome` na Tab_frota
+- **6.2** — Estrutura das fotos na pasta (nomes, caminhos, como extrair lat/lon/timestamp)
 
 ## 8.2. Iniciar Fase 1 — Mapeamento e Amarração
 Criar script de validação que, dado um dia:
-1. Liste todas as medições
-2. Identifique encarregado, equipe, veículo
-3. Cruze colaboradores com ponto Tangerino
-4. Cruze veículo com GPS CEABS
-5. Verifique disponibilidade de fotos e geo
-6. Gere relatório de integridade da cadeia de dados
+1. Liste todas as medições e IDs de lançamento
+2. Identifique encarregado, equipe, veículo (por apelido)
+3. Localize fotos na pasta pelo ID → extraia lat/lon e timestamp
+4. Identifique foto menor horário (1º ponto) e foto maior horário (último ponto)
+5. Cruze colaboradores com ponto Tangerino (via `tangerino_employee_id`)
+6. Cruze veículo com GPS CEABS via `Evento/list` (histórico do dia)
+7. Gere relatório de integridade da cadeia de dados
 
 ## 8.3. Construir base consolidada (Fase 3)
 Criar tabela `auditoria_ponto_consolidada` com todos os dados cruzados por dia/equipe/colaborador.
