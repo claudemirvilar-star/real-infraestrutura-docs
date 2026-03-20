@@ -828,12 +828,36 @@ elseif (preg_match('/^substituir\s+(motorista|encarregado)\s+(.+)$/i', $cmd, $_m
     $_tipo_sub = strtolower(trim($_mSub[1]));
     $_veiculo_sub = trim($_mSub[2]);
 
-    // Validar permissão ADM (escopo GLOBAL)
-    $gov_sub = governanca_validar_frota_completa($telefone, "WHATSAPP");
-    if (!$gov_sub["autorizado"]) {
-        $reply = "⛔ Você não tem permissão para substituir motorista/encarregado.";
+    // Resolver veículo primeiro
+    $_resolved_sub = resolver_placa_ou_apelido($_veiculo_sub);
+    if (!$_resolved_sub["encontrado"]) {
+        $reply = "❌ Veículo não encontrado: " . strtoupper($_veiculo_sub) . "\nDigite a placa ou o apelido exato (ex: THOR 23)";
     } else {
-        $reply = substituir_iniciar($from, $_tipo_sub, $_veiculo_sub, $telefone);
+        $_placa_sub = $_resolved_sub["placa"];
+
+        // Verificar vínculo do veículo (REAL ou BTH/LOCATARIA)
+        $_placa_sub_norm = preg_replace("/[^A-Z0-9]/", "", strtoupper($_placa_sub));
+        $_meta_sub = frota_buscar_dados($_placa_sub_norm);
+        $_vinculo_sub = strtoupper($_meta_sub["vinculo"] ?? "REAL");
+
+        if ($_vinculo_sub === "LOCATARIA") {
+            // FROTA BTH: encarregado/supervisor/gerente do veículo pode substituir (motorista NÃO)
+            $gov_sub = governanca_validar($telefone, $_placa_sub, "BLOQUEAR", "WHATSAPP");
+            $_papel_sub = strtoupper($gov_sub["pessoa"]["papel"] ?? "");
+            if (!$gov_sub["autorizado"] || $_papel_sub === "MOTORISTA") {
+                $reply = "⛔ Você não tem permissão para substituir motorista/encarregado neste veículo.";
+            } else {
+                $reply = substituir_iniciar($from, $_tipo_sub, $_veiculo_sub, $telefone);
+            }
+        } else {
+            // FROTA REAL: somente ADMs com escopo GLOBAL
+            $gov_sub = governanca_validar_frota_completa($telefone, "WHATSAPP");
+            if (!$gov_sub["autorizado"]) {
+                $reply = "⛔ Você não tem permissão para substituir motorista/encarregado.";
+            } else {
+                $reply = substituir_iniciar($from, $_tipo_sub, $_veiculo_sub, $telefone);
+            }
+        }
     }
 }
 
