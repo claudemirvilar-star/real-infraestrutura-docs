@@ -1,7 +1,7 @@
 # CEABS — BLOQUEIO VEICULAR
 
 > Ficha técnica auditada — gerada por cruzamento entre documentação e código em produção (VPS2)
-> Última auditoria: 2026-03-18
+> Última auditoria: 2026-03-20
 
 ---
 
@@ -88,6 +88,9 @@ MCP Gateway (call.php)
 | Confirmar pedido | `/app/ceabs/confirmar_pedido_ceabs.php` | Confirmação 2-step (MCP) |
 | Listar permitidos | `/app/ceabs/listar_veiculos_permitidos.php` | Veículos por autorização |
 | Substituir handler | `/app/whatsapp/substituir_handler.php` | Substituição motorista/encarregado |
+| Cobrança bloqueio noturno | `/app/ceabs/cobranca_bloqueio_noturno.php` | Cobrança com tom escalado (v2) |
+| Auto-bloqueio noturno | `/app/ceabs/donna_auto_bloqueio_noturno.php` | Auto-bloqueio após 3ª notificação |
+| Desbloqueio matinal BTH | `/app/ceabs/donna_desbloqueio_auto_bth.php` | Desbloqueio 05:05 veículos BTH |
 | Governança | `/app/frota/governanca_validar.php` | Motor de permissões |
 | OpenClaw confirm | `/openclaw/ceabs_confirm.php` | Proxy de confirmação |
 | Chave proxy | `/app/_secrets/openclaw_key.php` | X-OpenClaw-Key |
@@ -113,11 +116,11 @@ motorista_atual_nome        VARCHAR(120)
 motorista_atual_telefone    VARCHAR(20)
 encarregado_atual_nome      VARCHAR(120)
 encarregado_atual_telefone  VARCHAR(20)
-status_bloqueio             ENUM('LIVRE','BLOQUEADO_OPERACIONAL','BLOQUEADO_ADMIN_REAL') INDEX
+status_bloqueio             ENUM('LIVRE','BLOQUEADO_OPERACIONAL','BLOQUEADO_ADMIN_REAL','BLOQUEADO_DONNA') INDEX
 bloqueado_por_empresa       ENUM('REAL','LOCATARIA')
 bloqueado_por_nome          VARCHAR(120)
 bloqueado_por_telefone      VARCHAR(20)
-bloqueado_por_papel         ENUM('DIRETOR','GERENTE_ADM','GERENTE_FROTAS','SUPERVISOR','MOTORISTA','ENCARREGADO_FROTAS')
+bloqueado_por_papel         ENUM('DIRETOR','GERENTE_ADM','GERENTE_FROTAS','SUPERVISOR','MOTORISTA','ENCARREGADO_FROTAS','DONNA_AUTO')
 bloqueado_em                DATETIME
 motivo_bloqueio             VARCHAR(255)
 origem_bloqueio_atual       VARCHAR(30)
@@ -204,6 +207,8 @@ updated_at  DATETIME
 2. **Escopo VEICULO** → só veículos vinculados ao id_frota
 3. **Regra de soberania patrimonial:** Se veículo bloqueado por empresa=REAL (status `BLOQUEADO_ADMIN_REAL`), locatária **perde autonomia** — só REAL pode desbloquear
 4. **Permissões granulares:** `pode_consultar`, `pode_localizar`, `pode_bloquear`, `pode_desbloquear`
+5. **BLOQUEADO_DONNA** (nível 0): auto-bloqueio noturno. Motorista (1) e encarregado (2) podem desbloquear
+6. **Comando substituir:** REAL → só ADMs GLOBAL | BTH → ADMs GLOBAL + encarregado vinculado ao veículo (motorista BLOQUEADO)
 
 ---
 
@@ -214,6 +219,9 @@ updated_at  DATETIME
 | Verificação física | `verificar_bloqueio_pendente.php` | **1x/minuto** | Consulta CEABS, confirma efetivação |
 | Relatório diário | `relatorio_diario_bloqueio.php` | **08:10 diário** | Resumo D-1 para inscritos |
 | Health rastreadores | `donna_health_rastreadores.sh` | **07:00 e 19:00** | Verifica saúde dos rastreadores |
+| Cobrança bloqueio noturno | `donna_cobranca_bloqueio_noturno.sh` | ***/20 18-23 seg-sáb** | Tom escalado: lembrete→reforço→último aviso |
+| Auto-bloqueio noturno | `donna_auto_bloqueio_noturno.sh` | ***/2 18-23 seg-sáb** | Bloqueia após 10min do 3º aviso |
+| Desbloqueio matinal BTH | `donna_desbloqueio_auto_bth.sh` | **05:05 diário** | Desbloqueia BTH com BLOQUEADO_DONNA |
 
 ---
 
@@ -302,7 +310,8 @@ Enviado para inscritos em `Tab_alertas_bloqueio`. Consolida:
 5. Donna: "✅ Confirma? Novo motorista: João Silva (21987654321)? Responda SIM"
 6. Usuário: `SIM`
 7. Donna: "✅ Motorista do THOR 23 atualizado!"
-- **Permissão:** Apenas ADMs (escopo GLOBAL)
+- **Permissão REAL:** Apenas ADMs (escopo GLOBAL) — lógica original
+- **Permissão BTH:** ADMs GLOBAL + encarregado vinculado ao veículo (motorista bloqueado)
 - **Timeout:** 10 minutos
 - **Escape:** comandos como `status`, `frota`, `ajuda` funcionam durante pending
 - **Validação:** rejeita telefone quando espera nome, rejeita contato sem dados
@@ -327,6 +336,69 @@ Enviado para inscritos em `Tab_alertas_bloqueio`. Consolida:
 
 ---
 
+## AUTO-BLOQUEIO NOTURNO E DESBLOQUEIO MATINAL BTH (desde 2026-03-20)
+
+### Fluxo completo
+
+```
+18h-23h (seg-sáb)
+      │
+      ▼
+Cron */20 min: cobranca_bloqueio_noturno.php
+      │
+      ├── Consulta frota CEABS (fleet_status)
+      ├── Filtra: ignição OFF >30min + status_bloqueio=LIVRE
+      ├── Conta notificações do dia por veículo
+      │
+      ├── 1ª notificação: 📋 LEMBRETE
+      ├── 2ª notificação: ⚠️ REFORÇO
+      └── 3ª notificação: 🚨 ÚLTIMO AVISO
+              │
+              ├── Agenda auto_bloqueio_agendado = NOW()+10min
+              │
+              ▼
+        Cron */2 min: donna_auto_bloqueio_noturno.php
+              │
+              ├── Verifica: auto_bloqueio_agendado vencido + ainda LIVRE
+              ├── Bloqueia via proxy CEABS
+              ├── Tab_frota: BLOQUEADO_DONNA / DONNA_AUTO
+              ├── Notifica motorista + encarregado + Leandro
+              ├── Veículos BTH: aviso "será desbloqueado às 05:05"
+              └── Enfileira verificação física
+                      │
+                      ▼ (dia seguinte)
+                Cron 05:05: donna_desbloqueio_auto_bth.php
+                      │
+                      ├── Busca: LOCATARIA + BLOQUEADO_DONNA
+                      ├── Desbloqueia via proxy CEABS
+                      ├── Tab_frota: LIVRE
+                      ├── Notifica motorista + encarregado + Leandro
+                      └── Enfileira verificação física
+```
+
+### Hierarquia de desbloqueio pós auto-bloqueio
+
+| Papel | Nível | Pode desbloquear BLOQUEADO_DONNA? |
+|-------|-------|----------------------------------|
+| DONNA_AUTO | 0 | — (é quem bloqueou) |
+| MOTORISTA | 1 | ✅ (1 >= 0) |
+| ENCARREGADO_FROTAS | 2 | ✅ (2 >= 0) |
+| SUPERVISOR | 3 | ✅ |
+| DIRETOR | 5 | ✅ |
+
+### Tabela de log: `log_cobranca_bloqueio_noturno`
+
+| Coluna | Tipo | Função |
+|--------|------|--------|
+| placa | VARCHAR(20) | Placa do veículo |
+| apelido | VARCHAR(100) | Apelido |
+| ignicao_off_min | INT | Minutos com ignição desligada |
+| notificacao_num | INT | Nº da notificação (1, 2, 3...) |
+| auto_bloqueio_agendado | DATETIME | Timestamp agendado (BRT) |
+| auto_bloqueio_executado | TINYINT(1) | 0=pendente, 1=executado/cancelado |
+
+---
+
 ## LOGS E RASTREABILIDADE
 
 | Log | Path | Conteúdo |
@@ -334,8 +406,12 @@ Enviado para inscritos em `Tab_alertas_bloqueio`. Consolida:
 | Verificação física | `/var/log/ceabs_verificacao_bloqueio.log` | Saída do cron 1/min |
 | Relatório diário | `/var/log/ceabs_relatorio_diario.log` | Envio do relatório D-1 |
 | Health rastreadores | `/var/log/donna_health_rastreadores.log` | Saúde dos rastreadores |
+| Cobrança bloqueio noturno | `/var/log/ceabs_cobranca_bloqueio_noturno.log` | Notificações de cobrança |
+| Auto-bloqueio noturno | `/var/log/ceabs_auto_bloqueio_noturno.log` | Bloqueios automáticos |
+| Desbloqueio matinal BTH | `/var/log/ceabs_desbloqueio_auto_bth.log` | Desbloqueios matinais |
 | Auditoria MCP | `/app/mcp/runtime/mcp_audit.log` | Auditoria de chamadas MCP |
 | Banco | `Tab_ceabs_verificacao_bloqueio` | Histórico completo de verificações |
+| Banco | `log_cobranca_bloqueio_noturno` | Log de cobrança + auto-bloqueio |
 
 ---
 
