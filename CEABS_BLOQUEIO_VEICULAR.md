@@ -11,7 +11,8 @@
 |-------|-------|
 | Status | **PRODUÇÃO ATIVA** |
 | Canais | WhatsApp + Telegram (ambos operacionais) |
-| Veículos cadastrados | 39 |
+| Veículos ativos | 36 (24 Real + 12 BTH) |
+| Veículos inativos | 3 — THOR 20, THOR 16 (ROUBADO), ONIX (VENDIDO) |
 | Veículos bloqueados | 5 (em 17/03/2026) |
 | Autorizados | 5 (acesso global) |
 | Inscritos alertas | 2 (Claudemir, Leandro Spot) |
@@ -88,6 +89,7 @@ MCP Gateway (call.php)
 | Confirmar pedido | `/app/ceabs/confirmar_pedido_ceabs.php` | Confirmação 2-step (MCP) |
 | Listar permitidos | `/app/ceabs/listar_veiculos_permitidos.php` | Veículos por autorização |
 | Substituir handler | `/app/whatsapp/substituir_handler.php` | Substituição motorista/encarregado |
+| Relatório noturno frota | `/app/ceabs/donna_relatorio_noturno_frota.php` | 2 relatórios (REAL + BTH) às 21h |
 | Cobrança bloqueio noturno | `/app/ceabs/cobranca_bloqueio_noturno.php` | Cobrança com tom escalado (v2) |
 | Auto-bloqueio noturno | `/app/ceabs/donna_auto_bloqueio_noturno.php` | Auto-bloqueio após 3ª notificação |
 | Desbloqueio matinal BTH | `/app/ceabs/donna_desbloqueio_auto_bth.php` | Desbloqueio 05:05 veículos BTH |
@@ -222,6 +224,7 @@ updated_at  DATETIME
 | Cobrança bloqueio noturno | `donna_cobranca_bloqueio_noturno.sh` | ***/20 18-23 seg-sáb** | Tom escalado: lembrete→reforço→último aviso |
 | Auto-bloqueio noturno | `donna_auto_bloqueio_noturno.sh` | ***/2 18-23 seg-sáb** | Bloqueia após 10min do 3º aviso |
 | Desbloqueio matinal BTH | `donna_desbloqueio_auto_bth.sh` | **05:05 diário** | Desbloqueia BTH com BLOQUEADO_DONNA |
+| Relatório noturno frota | `donna_relatorio_noturno_frota.sh` | **21:00 diário** | 2 relatórios (REAL + BTH) para Claudemir/Leandro/Vinicius |
 
 ---
 
@@ -409,9 +412,22 @@ Cron */20 min: cobranca_bloqueio_noturno.php
 | Cobrança bloqueio noturno | `/var/log/ceabs_cobranca_bloqueio_noturno.log` | Notificações de cobrança |
 | Auto-bloqueio noturno | `/var/log/ceabs_auto_bloqueio_noturno.log` | Bloqueios automáticos |
 | Desbloqueio matinal BTH | `/var/log/ceabs_desbloqueio_auto_bth.log` | Desbloqueios matinais |
+| Relatório noturno frota | `/var/log/ceabs_relatorio_noturno_frota.log` | Envio relatórios 21h |
 | Auditoria MCP | `/app/mcp/runtime/mcp_audit.log` | Auditoria de chamadas MCP |
 | Banco | `Tab_ceabs_verificacao_bloqueio` | Histórico completo de verificações |
 | Banco | `log_cobranca_bloqueio_noturno` | Log de cobrança + auto-bloqueio |
+
+---
+
+## VEÍCULOS INATIVADOS (2026-03-20)
+
+| Veículo | Placa | Status | Motivo |
+|---------|-------|--------|--------|
+| THOR 20 | TJJ2F08 | ROUBADO | Roubo |
+| THOR 16 | TIV-3C98 | ROUBADO | Roubo |
+| ONIX | QPA-4C32 | VENDIDO | Venda |
+
+**Efeito:** Governança bloqueia qualquer ação. Excluídos de: relatório noturno, cobrança bloqueio, auto-bloqueio, desbloqueio matinal BTH. Filtro: `UPPER(Status) NOT IN ('INATIVO','VENDIDO','ROUBADO')` aplicado em todos os scripts.
 
 ---
 
